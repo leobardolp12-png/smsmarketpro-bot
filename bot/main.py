@@ -38,7 +38,7 @@ def start_kb():
 
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.keyboards import start_kb
+from bot.handlers import start_kb
 from bot.db import engine, ensure_client
 from bot.utils.formatting import format_currency
 
