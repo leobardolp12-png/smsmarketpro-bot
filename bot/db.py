@@ -63,14 +63,23 @@ recargas = Table('recargas', metadata,
     Column('created_at', TIMESTAMP)
 )
 
-def ensure_client(conn, user_id, name=None):
-    sel = select([clients.c.id, clients.c.balance]).where(clients.c.user_id==user_id)
-    res = conn.execute(sel).fetchone()
-    if res:
-        return res
-    ins = clients.insert().values(user_id=user_id, name=name or 'Unknown', balance=0, orders_count=0)
-    conn.execute(ins)
-    return conn.execute(sel).fetchone()
+def ensure_client(conn, user_id: int, first_name: str, username: str = None):
+    """
+    Verifica si el cliente existe, si no lo crea.
+    Retorna un diccionario con los datos del cliente.
+    """
+    client = conn.execute(clients.select().where(clients.c.user_id == user_id)).fetchone()
+    if not client:
+        conn.execute(
+            clients.insert().values(
+                user_id=user_id,
+                username=username or first_name,
+                saldo=0
+            )
+        )
+        client = conn.execute(clients.select().where(clients.c.user_id == user_id)).fetchone()
+
+    return dict(client)
 
 def create_order(conn, user_id, app, quantity, price_unit, total):
     # create client if not exist
