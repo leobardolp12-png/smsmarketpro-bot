@@ -1,5 +1,5 @@
 python-telegram-bot~=20.5
-sqlalchemy~=1.5
+SQLAlchemy>=2.0,<2.1
 psycopg2-binary~=2.9
 redis~=4.5
 rq~=1.11
