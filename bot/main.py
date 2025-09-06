@@ -7,7 +7,8 @@ from telegram.ext import (
     ContextTypes, ConversationHandler
 )
 from bot.db import engine, ensure_client, create_order
-from bot.utils import calculate_total, generate_captcha_options, format_currency
+from bot.utils.formatting import format_currency
+from bot.utils import calculate_total, generate_captcha_options
 
 load_dotenv()
 
