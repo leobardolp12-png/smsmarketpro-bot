@@ -3,13 +3,8 @@ import os, logging, time
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    ConversationHandler,
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters,
+    ContextTypes, ConversationHandler
 )
 from bot.db import engine, ensure_client, create_order
 from bot.utils import calculate_total, generate_captcha_options, format_currency
@@ -21,12 +16,11 @@ ADMIN_IDS = [int(x) for x in os.getenv('ADMIN_IDS','').split(',') if x.strip()]
 GROUP_ORDERS_ID = int(os.getenv('GROUP_ORDERS_ID','0') or 0)
 GROUP_RECARGAS_ID = int(os.getenv('GROUP_RECARGAS_ID','0') or 0)
 PRICE_PER_SMS = float(os.getenv('PRICE_PER_SMS','10'))
-OPERATOR_PAYOUT = float(os.getenv('OPERATOR_PAYOUT_PER_CODE','8'))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# In-memory sessions
+# --- In-memory sessions ---
 SESSIONS = {}
 
 # --- Keyboards ---
@@ -39,9 +33,9 @@ def start_kb():
     ])
 
 # --- Estados ConversationHandler ---
-DEPOSIT_AMOUNT, DEPOSIT_CONFIRM = range(2)
+DEPOSIT_AMOUNT, DEPOSIT_CONFIRM, ORDER_APP, ORDER_QTY, ORDER_CONFIRM = range(5)
 
-# --- Handlers ---
+# --- Start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     try:
@@ -60,7 +54,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text=welcome_text, reply_markup=start_kb())
 
-# --- Deposits ---
+# --- Depósitos ---
 async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -113,30 +107,82 @@ deposit_handler = ConversationHandler(
     fallbacks=[]
 )
 
-# --- Callbacks generales ---
+# --- Órdenes ---
+async def sms_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("📱 ¿Para qué app necesitas SMS?")
+    SESSIONS[query.from_user.id] = {'state':'awaiting_order_app'}
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    text = (update.message.text or '').strip()
+    session = SESSIONS.get(uid)
+    if not session:
+        await update.message.reply_text("Usa /start para ver el menú.")
+        return
+
+    state = session.get('state')
+    if state == 'awaiting_order_app':
+        session['order_app'] = text
+        session['state'] = 'awaiting_order_qty'
+        SESSIONS[uid] = session
+        await update.message.reply_text("¿Cuántos SMS necesitas?")
+        return
+
+    if state == 'awaiting_order_qty':
+        try:
+            qty = int(text)
+        except ValueError:
+            await update.message.reply_text("Cantidad inválida.")
+            return
+        app_name = session.get('order_app')
+        total, price_unit = calculate_total(qty, PRICE_PER_SMS)
+        session['order_qty'] = qty
+        session['state'] = 'awaiting_order_confirm'
+        SESSIONS[uid] = session
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton('Confirmar pedido', callback_data='confirm_order')],
+            [InlineKeyboardButton('Cancelar', callback_data='cancel_order')]
+        ])
+        await update.message.reply_text(f"Resumen:\nApp: {app_name}\nCantidad: {qty}\nPrecio unitario: ${price_unit}\nTotal: ${total}", reply_markup=kb)
+        return
+
+    await update.message.reply_text("No hay flujo activo.")
+
 async def callback_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     uid = query.from_user.id
 
+    if data == 'cancel_order':
+        SESSIONS.pop(uid, None)
+        await query.edit_message_text("Pedido cancelado.")
+        return
+
+    if data == 'confirm_order':
+        session = SESSIONS.get(uid)
+        if not session:
+            await query.edit_message_text("No hay pedido pendiente.")
+            return
+        qty = session['order_qty']
+        app_name = session['order_app']
+        total, price_unit = calculate_total(qty, PRICE_PER_SMS)
+        with engine.connect() as conn:
+            code = create_order(conn, uid, app_name, qty, price_unit, total)
+        await query.edit_message_text(f"✅ Tu orden {code} fue creada.")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Aceptar pedido", callback_data=f"order_accept|{code}")]])
+        await context.bot.send_message(chat_id=GROUP_ORDERS_ID, text=f"Orden {code}\nApp: {app_name}\nCantidad: {qty}\nTotal: ${total}\nCliente: {uid}", reply_markup=kb)
+        SESSIONS.pop(uid, None)
+
     if data.startswith('order_accept|'):
-        await query.answer("Orden aceptada (ejemplo, agregar lógica real)")
-    elif data.startswith('captcha|'):
-        await query.answer("Captcha (ejemplo, agregar lógica real)")
+        parts = data.split('|')
+        order_code = parts[1]
+        await query.answer(f"Has aceptado la orden {order_code} (ejemplo, lógica real)")
 
-async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    uid = query.from_user.id
-    if data == 'sms':
-        await context.bot.send_message(chat_id=uid, text="¿Para qué app necesitas SMS?")
-    elif data == 'perfil':
-        await context.bot.send_message(chat_id=uid, text="Perfil ejemplo")
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Mensaje recibido, flujo aún no implementado.")
+    if data.startswith('captcha|'):
+        await query.answer("Captcha recibido (ejemplo, lógica real)")
 
 # --- Main ---
 def main():
@@ -144,16 +190,18 @@ def main():
 
     # Comandos
     app.add_handler(CommandHandler('start', start))
+
+    # ConversationHandlers
     app.add_handler(deposit_handler)
 
     # CallbackQueryHandlers
-    app.add_handler(CallbackQueryHandler(callback_query_handler, pattern='^(deposit|sms|info|historial|perfil|referidos)$'))
-    app.add_handler(CallbackQueryHandler(callback_actions, pattern=r'^(confirm_deposit|cancel_deposit|confirm_order|order_accept\|)$'))
+    app.add_handler(CallbackQueryHandler(sms_callback, pattern='^sms$'))
+    app.add_handler(CallbackQueryHandler(callback_actions, pattern=r'^(confirm_order|cancel_order|order_accept\|.*|captcha\|.*)$'))
 
     # Mensajes
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    # Arranca bot
+    # Arranca
     app.run_polling()
 
 if __name__ == "__main__":
