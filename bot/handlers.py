@@ -17,6 +17,19 @@ def start_kb():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    # Mensaje de bienvenida
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f"👋 ¡Hola @{user.username}! Bienvenido a SMSProMarketBot 🚀\n\n"
+             "💰 Tu saldo actual: $24\n\n"
+             "Este bot te permite pedir SMS para tus apps, "
+             "de forma rápida y sin complicaciones.\n\n"
+             " ¿Qué deseas hacer ahora?",
+        reply_markup=start_kb()
+    )
+    
 # Estados para ConversationHandler
 DEPOSIT_AMOUNT, DEPOSIT_CONFIRM = range(2)
 
